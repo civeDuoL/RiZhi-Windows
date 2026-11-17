@@ -26,20 +26,29 @@ FunctionEnd
 !macroend
 
 !macro customRemoveFiles
-  ; 旧版可能把 memory 放在程序目录中。若有数据，先转移到兄弟目录。
-  IfFileExists "$INSTDIR\memory\*.*" 0 removeProgram
-  IfFileExists "$INSTDIR\..\memory" 0 moveLegacyMemory
-    MessageBox MB_OK|MB_ICONSTOP "检测到旧版程序目录和新数据目录中都有 memory。为避免覆盖记录，已停止卸载。请先备份并合并数据。"
+  ; 更新只删除程序目录。若旧版曾把数据放在目录内，停止而不移动或删除它。
+  IfFileExists "$INSTDIR\memory" 0 removeProgram
+    MessageBox MB_OK|MB_ICONSTOP "程序目录中存在 memory 数据文件夹。为保护数据，已停止卸载；请先单独备份并迁移该文件夹。"
+    SetErrorLevel 2
     Abort
-  moveLegacyMemory:
-    Rename "$INSTDIR\memory" "$INSTDIR\..\memory"
-    IfErrors 0 removeProgram
-      MessageBox MB_OK|MB_ICONSTOP "无法安全移动旧版 memory，已停止卸载。请先备份数据。"
-      Abort
   removeProgram:
     SetOutPath $TEMP
     RMDir /r "$INSTDIR"
-    IfFileExists "$INSTDIR" 0 +3
-      MessageBox MB_OK|MB_ICONSTOP "程序目录未能删除，卸载未完成。请关闭日织及占用文件后重试。"
-      Abort
+    ; Windows 可能暂时保留空目录；只在确有文件残留时报告失败。
+    ClearErrors
+    FindFirst $R0 $R1 "$INSTDIR\*"
+    IfErrors removalDone
+  checkRemaining:
+    StrCmp $R1 "." nextEntry
+    StrCmp $R1 ".." nextEntry
+    FindClose $R0
+    MessageBox MB_OK|MB_ICONSTOP "程序文件未能全部删除，卸载未完成。请关闭日织及占用文件后重试。"
+    SetErrorLevel 2
+    Abort
+  nextEntry:
+    ClearErrors
+    FindNext $R0 $R1
+    IfErrors 0 checkRemaining
+    FindClose $R0
+  removalDone:
 !macroend
