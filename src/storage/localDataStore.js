@@ -49,13 +49,13 @@ function getLegacySettingsLocationPath(app) {
 }
 
 function getDefaultMemoryDir(app) {
-  // 用户资料与程序同级保存。这样只要安装位置选在非系统盘，重装系统
-  // 不会影响日织的数据；AppData 只保留一个很小的“定位文件”。
-  return getLegacyInstallMemoryDir(app);
+  if (!app.isPackaged) return getLegacyInstallMemoryDir(app);
+  // 安装目录：<选定位置>/rizhi/rizhi；数据目录：<选定位置>/rizhi/memory。
+  return path.join(path.dirname(path.dirname(app.getPath('exe'))), 'memory');
 }
 
 function getLegacyInstallMemoryDir(app) {
-  const appRoot = app.isPackaged ? path.dirname(process.execPath) : app.getAppPath();
+  const appRoot = app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
   return path.join(appRoot, 'memory');
 }
 
@@ -107,7 +107,7 @@ async function getActiveSettingsPathWithoutMigration(app) {
     try {
       const text = await fs.readFile(locationPath, 'utf8');
       const location = JSON.parse(text);
-      if (location.settingsFilePath) return location.settingsFilePath;
+      if (location.settingsFilePath && await fileExists(location.settingsFilePath)) return location.settingsFilePath;
     } catch (error) {}
   }
   if (await fileExists(getDefaultSettingsPath(app))) return getDefaultSettingsPath(app);
@@ -968,6 +968,7 @@ function parseLocalDate(date) {
 
 module.exports = {
   createDefaultData,
+  getDefaultMemoryDir,
   getStoragePaths,
   loadData,
   resetData,

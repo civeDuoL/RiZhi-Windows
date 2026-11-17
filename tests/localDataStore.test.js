@@ -3,6 +3,7 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const {
+  getDefaultMemoryDir,
   getStoragePaths,
   saveData,
   setStorageRoot
@@ -22,6 +23,13 @@ const {
       return appRoot;
     }
   };
+  assert.equal(getDefaultMemoryDir({
+    isPackaged: true,
+    getPath(name) {
+      assert.equal(name, 'exe');
+      return path.join(testRoot, 'chosen', 'rizhi', 'rizhi', '日织.exe');
+    }
+  }), path.join(testRoot, 'chosen', 'rizhi', 'memory'));
 
   try {
     const initialPaths = await getStoragePaths(app);

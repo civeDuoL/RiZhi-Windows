@@ -1,28 +1,44 @@
+!include "FileFunc.nsh"
+
+!macro customPageAfterChangeDir
+  Page custom normalizeRizhiInstallDirectory
+!macroend
+
+Function normalizeRizhiInstallDirectory
+  ; 安装向导所选的是上层目录。最终始终使用 <位置>\rizhi\rizhi。
+  ; 若用户已输入完整程序路径，则保持不变。
+  ${GetFileName} "$INSTDIR" $R0
+  ${If} $R0 == "rizhi"
+    ${GetParent} "$INSTDIR" $R1
+    ${GetFileName} "$R1" $R2
+    ${If} $R2 != "rizhi"
+      StrCpy $INSTDIR "$INSTDIR\rizhi"
+    ${EndIf}
+  ${Else}
+    StrCpy $INSTDIR "$INSTDIR\rizhi\rizhi"
+  ${EndIf}
+  Abort ; 只归一化路径，不额外显示一页。
+FunctionEnd
+
 !macro customUnInstall
-  Push $R0
-  Push $R1
+  ; 卸载和自动更新均保留用户数据。旧版 AppData 也不由卸载器删除。
+!macroend
 
-  ${If} ${Silent}
-    Goto keepMemory
-  ${EndIf}
-
-  ${GetParameters} $R0
-  ${GetOptions} $R0 "/KEEP_APP_DATA" $R1
-  ${IfNot} ${Errors}
-    Goto keepMemory
-  ${EndIf}
-  ${GetOptions} $R0 "--updated" $R1
-  ${IfNot} ${Errors}
-    Goto keepMemory
-  ${EndIf}
-
-  MessageBox MB_YESNO|MB_ICONQUESTION "是否删除日织的本地记录文件？$\r$\n$\r$\n选择“是”会删除 AppData\Roaming 下的日织 memory 文件夹。$\r$\n选择“否”会保留 memory 文件夹和其中的文件。" IDYES deleteMemory IDNO keepMemory
-
-  deleteMemory:
-    RMDir /r "$APPDATA\RiZhi\memory"
-    RMDir /r "$APPDATA\rizhi\memory"
-
-  keepMemory:
-    Pop $R1
-    Pop $R0
+!macro customRemoveFiles
+  ; 旧版可能把 memory 放在程序目录中。若有数据，先转移到兄弟目录。
+  IfFileExists "$INSTDIR\memory\*.*" 0 removeProgram
+  IfFileExists "$INSTDIR\..\memory" 0 moveLegacyMemory
+    MessageBox MB_OK|MB_ICONSTOP "检测到旧版程序目录和新数据目录中都有 memory。为避免覆盖记录，已停止卸载。请先备份并合并数据。"
+    Abort
+  moveLegacyMemory:
+    Rename "$INSTDIR\memory" "$INSTDIR\..\memory"
+    IfErrors 0 removeProgram
+      MessageBox MB_OK|MB_ICONSTOP "无法安全移动旧版 memory，已停止卸载。请先备份数据。"
+      Abort
+  removeProgram:
+    SetOutPath $TEMP
+    RMDir /r "$INSTDIR"
+    IfFileExists "$INSTDIR" 0 +3
+      MessageBox MB_OK|MB_ICONSTOP "程序目录未能删除，卸载未完成。请关闭日织及占用文件后重试。"
+      Abort
 !macroend

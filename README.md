@@ -134,22 +134,26 @@
 
 ## 本地存储
 
-任务和记录按月保存为 JSON 文件。默认统一存放位置位于当前 Windows 用户的数据目录：
+安装时选择上层位置，例如 `D:\Download\Tool`。安装器将程序与数据分别放在 `rizhi` 下的两个并列文件夹中：
 
 ```text
-C:\Users\用户\AppData\Roaming\rizhi\memory\
-├─ rizhi-data-YYYY-MM.json
-├─ rizhi-settings.json
-├─ images\
-└─ models\asr\
+D:\Download\Tool\rizhi\
+├─ rizhi\                  程序与卸载器
+└─ memory\
+   ├─ rizhi-settings.json
+   ├─ YYYY-MM\
+   │  ├─ rizhi-data-YYYY-MM.json
+   │  └─ YYYY-MM-DD\       当日照片和视频
+   └─ models\asr\
 ```
 
 - `rizhi-data-YYYY-MM.json`：保存对应月份的任务安排和每日记录。
 - `rizhi-settings.json`：保存任务分类及其周期、日子标签、安排模板和其他本地配置。
-- `images`：按月份和日期保存记录中归档的照片与视频。
+- `YYYY-MM\YYYY-MM-DD`：按月份和日期保存新归档的照片与视频；旧版的 `images` 目录仍兼容读取。
 - `models\asr`：保存已安装的离线语音模型。
 
 实际路径以“设置 → 数据文件”显示的内容为准。更改统一存放位置可用于迁移、备份或归档全部日织内容。
+卸载器只删除程序目录，保留同级的 `memory`。升级旧安装时，若程序目录内还存有 `memory`，卸载器会尝试先移到同级；如果同级已有数据，则停止卸载并提示先备份合并。
 
 ## 开发
 
