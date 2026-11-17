@@ -1,0 +1,93 @@
+{
+  "name": "rizhi",
+  "version": "1.3.0",
+  "description": "日织 - 本地日程与生活记录桌面客户端",
+  "main": "main.js",
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/civeDuoL/RiZhi-Windows.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check floatingTaskPreload.js && node --check src/renderer.js && node --check src/floating-task.js && node --check src/ai/contracts.js && node --check src/ai/index.js && node --check src/asr/asrModelConfig.js && node --check src/asr/modelManager.js && node --check src/asr/modelLocation.js && node --check src/asr/asrService.js && node --check src/asr/asrWorker.js && node --check src/shared/dateUtils.js && node --check src/shared/taskTimeUtils.js && node --check src/shared/dailyCycle.js && node --check src/shared/autoPlanning.js && node --check src/shared/journalTags.js && node --check src/shared/taskCategories.js && node --check src/parsers/scheduleParser.js && node --check src/parsers/dailyPlanImportParser.js && node --check src/parsers/textScheduleParser.js && node --check src/parsers/taskTextParser.js && node --check src/parsers/textUtils.js && node --check src/storage/localDataStore.js && node --check tests/aiContracts.test.js && node --check tests/autoPlanning.test.js && node --check tests/dailyCycle.test.js && node --check tests/dailyPlanImportParser.test.js && node --check tests/localDataStore.test.js && node --check tests/taskCategories.test.js && node tests/aiContracts.test.js && node tests/autoPlanning.test.js && node tests/dailyCycle.test.js && node tests/dailyPlanImportParser.test.js && node tests/taskTextParser.test.js && node tests/taskCategories.test.js && node tests/localDataStore.test.js && node tests/asrModelManager.test.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis",
+    "release": "electron-builder --win nsis --publish always"
+  },
+  "build": {
+    "appId": "com.rizhi.pc",
+    "productName": "日织",
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "civeDuoL",
+        "repo": "RiZhi-Windows"
+      }
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "floatingTaskPreload.js",
+      "rizhi.ico",
+      "rizhi.svg",
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "rizhi.ico",
+        "to": "rizhi.ico"
+      },
+      {
+        "from": "rizhi.svg",
+        "to": "rizhi.svg"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "rizhi.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "日织"
+    }
+  },
+  "keywords": [
+    "RiZhi",
+    "schedule",
+    "health",
+    "reminder"
+  ],
+  "devDependencies": {
+    "electron": "44.1.1",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "ffmpeg-static": "^5.2.0",
+    "qrcode": "^1.5.4",
+    "sherpa-onnx": "^1.13.8",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "allowScripts": {
+    "ffmpeg-static@5.2.0": true
+  }
+}
