@@ -1604,7 +1604,7 @@ h2 {
 
 .task-time-picker {
   position: fixed;
-  z-index: 60;
+  z-index: 1010;
   width: 248px;
   padding: 14px;
   border: 1px solid #c7d0d9;

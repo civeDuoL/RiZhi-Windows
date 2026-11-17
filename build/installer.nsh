@@ -1,4 +1,5 @@
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
 
 !macro customPageAfterChangeDir
   Page custom normalizeRizhiInstallDirectory
