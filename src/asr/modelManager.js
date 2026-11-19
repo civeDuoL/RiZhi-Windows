@@ -90,7 +90,13 @@ class AsrModelManager {
         if (checked.missingFiles.length || checked.invalidFiles.length) {
           throw new AsrModelManagerError('ASR_MIGRATION_CHECKSUM_FAILED', '迁移后的模型完整性校验失败，已保留原模型。');
         }
-      } : null
+      } : null,
+      validateExisting: async (directory) => {
+        const checked = await validateModelDirectory(directory, this.modelConfig, { verifyHashes: true });
+        if (checked.missingFiles.length || checked.invalidFiles.length) {
+          throw new AsrModelManagerError('ASR_MIGRATION_CHECKSUM_FAILED', '目标目录的模型不完整，未覆盖已有文件。');
+        }
+      }
     });
     this.modelDirectory = result.directory;
     this.downloadState = 'not-installed';

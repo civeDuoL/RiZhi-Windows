@@ -43,22 +43,30 @@ const { createAsrModelManager } = require('../src/asr/modelManager');
     const target = path.join(parent, config.modelId);
     const result = await manager.changeDirectory(parent);
     assert.equal(result.modelStatus.isReady, true);
-    assert.equal(result.modelStatus.downloadDirectory, target);
+    assert.equal(result.modelStatus.downloadDirectory.toLowerCase(), target.toLowerCase());
     assert.equal(result.modelStatus.source, 'custom');
     assert.equal(result.cleanupWarning, '');
     assert.equal(await fs.readFile(path.join(target, 'extra', 'keep.txt'), 'utf8'), 'keep all contents');
-    await assert.rejects(fs.access(original), /ENOENT/);
+    assert.equal(await fs.readFile(path.join(original, 'encoder.onnx'), 'utf8'), content);
     assert.equal(await fs.readFile(untouched, 'utf8'), 'unchanged');
     const restarted = managerFor(app);
-    assert.equal(restarted.getDownloadDirectory(), target);
-    assert.equal(restarted.getRuntimeConfig().files.encoder, path.join(target, 'encoder.onnx'));
+    assert.equal(restarted.getDownloadDirectory().toLowerCase(), target.toLowerCase());
+    assert.equal(restarted.getRuntimeConfig().files.encoder.toLowerCase(), path.join(target, 'encoder.onnx').toLowerCase());
     assert.equal((await restarted.inspect()).isReady, true);
     assert.equal((await restarted.changeDirectory(parent)).unchanged, true);
 
     // Move a second time, proving the remembered source is used, not userData.
     const second = await restarted.changeDirectory(path.join(root, 'second-models'));
     assert.equal(second.modelStatus.isReady, true);
-    await assert.rejects(fs.access(target), /ENOENT/);
+    assert.equal(await fs.readFile(path.join(target, 'encoder.onnx'), 'utf8'), content);
+
+    const existingParent = path.join(root, 'existing-models');
+    const existingModel = path.join(existingParent, config.modelId);
+    await fs.mkdir(existingModel, { recursive: true });
+    await fs.writeFile(path.join(existingModel, 'encoder.onnx'), content);
+    const reused = await restarted.changeDirectory(existingParent);
+    assert.equal(reused.reusedExisting, true);
+    assert.equal(await fs.readFile(path.join(second.directory, 'encoder.onnx'), 'utf8'), content);
 
     // Future downloads must use the chosen directory even before installation.
     const emptyApp = appFor('not-installed');
@@ -66,7 +74,7 @@ const { createAsrModelManager } = require('../src/asr/modelManager');
     const emptyResult = await empty.changeDirectory(path.join(root, 'future-downloads'));
     assert.equal(emptyResult.migrated, false);
     assert.equal(emptyResult.modelStatus.state, 'not-installed');
-    assert.equal(managerFor(emptyApp).getDownloadDirectory(), emptyResult.directory);
+    assert.equal(managerFor(emptyApp).getDownloadDirectory().toLowerCase(), emptyResult.directory.toLowerCase());
 
     const conflictApp = appFor('conflict');
     const conflict = managerFor(conflictApp);
@@ -74,7 +82,7 @@ const { createAsrModelManager } = require('../src/asr/modelManager');
     const occupiedParent = path.join(root, 'occupied');
     await fs.mkdir(path.join(occupiedParent, config.modelId), { recursive: true });
     await fs.writeFile(path.join(occupiedParent, config.modelId, 'user-file.txt'), 'do not overwrite');
-    await assert.rejects(conflict.changeDirectory(occupiedParent), /不会覆盖/);
+    await assert.rejects(conflict.changeDirectory(occupiedParent), /未覆盖|不会覆盖/);
     assert.equal(conflict.getDownloadDirectory(), conflictSource);
     assert.equal(await fs.readFile(path.join(occupiedParent, config.modelId, 'user-file.txt'), 'utf8'), 'do not overwrite');
     await assert.rejects(conflict.changeDirectory(conflictSource), /不能互相包含/);

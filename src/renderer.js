@@ -9,6 +9,9 @@ const pages = {
   records: document.querySelector('#recordsPage'),
   settings: document.querySelector('#settingsPage')
 };
+let pageTransitionAnimations = [];
+let pageTransitionOutgoing = null;
+let pageTransitionToken = 0;
 const UNASSIGNED_CATEGORY_ID = 'category-unassigned';
 const MICROPHONE_TEST_SAMPLE_RATE = 48000;
 const {
@@ -133,8 +136,6 @@ const taskTimePicker = document.querySelector('#taskTimePicker');
 const taskTimePickerTitle = document.querySelector('#taskTimePickerTitle');
 const taskTimePickerHour = document.querySelector('#taskTimePickerHour');
 const taskTimePickerMinute = document.querySelector('#taskTimePickerMinute');
-const cancelTaskTimePickerButton = document.querySelector('#cancelTaskTimePickerButton');
-const confirmTaskTimePickerButton = document.querySelector('#confirmTaskTimePickerButton');
 const journalDate = document.querySelector('#journalDate');
 const journalTag = document.querySelector('#journalTag');
 const journalTagPaletteButton = document.querySelector('#journalTagPaletteButton');
@@ -352,6 +353,7 @@ let selectedTaskTemplateId = '';
 let expandedTaskTemplateId = '';
 let editingTaskTemplateId = '';
 let pendingTaskCategoryDeleteId = '';
+let taskCategoryReorderInProgress = false;
 const taskCategoryColorSaveTimers = new Map();
 let activeMediaAnnotationEditor = null;
 let activeMediaAnnotationCommit = null;
@@ -687,15 +689,13 @@ document.addEventListener('click', (event) => {
 document.addEventListener('pointerdown', (event) => {
   if (!activeTaskTimePicker) return;
   if (taskTimePicker.contains(event.target) || event.target.closest('.task-time-button')) return;
-  closeTaskTimePicker();
+  void confirmTaskTimePicker();
 });
 document.addEventListener('keydown', handleShortcutCapture, true);
 document.addEventListener('keydown', handleConfiguredShortcut, true);
 document.addEventListener('keydown', handleTaskHistoryShortcut);
 taskList.addEventListener('scroll', positionTaskTimePicker);
 if (createTaskDetailPanel) createTaskDetailPanel.addEventListener('scroll', positionTaskTimePicker);
-cancelTaskTimePickerButton.addEventListener('click', closeTaskTimePicker);
-confirmTaskTimePickerButton.addEventListener('click', () => void confirmTaskTimePicker());
 [taskTimePickerHour, taskTimePickerMinute].forEach((input) => {
   const max = input === taskTimePickerHour ? 23 : 59;
   input.addEventListener('focus', () => input.select());
@@ -703,9 +703,6 @@ confirmTaskTimePickerButton.addEventListener('click', () => void confirmTaskTime
   input.addEventListener('blur', () => normalizeTaskTimePickerUnit(input, max));
   input.addEventListener('keydown', handleTaskTimePickerKeydown);
   input.addEventListener('wheel', handleTaskTimePickerWheel, { passive: false });
-});
-taskTimePicker.querySelectorAll('[data-time-step]').forEach((button) => {
-  button.addEventListener('click', () => stepTaskTimePickerUnit(button.dataset.timeUnit, Number(button.dataset.timeStep)));
 });
 if (window.whbr.onHistoryUndo) window.whbr.onHistoryUndo(handleTaskHistoryUndo);
 if (window.whbr.onHistoryRedo) window.whbr.onHistoryRedo(handleTaskHistoryRedo);
@@ -5077,13 +5074,30 @@ function renderAll({ taskRenderOptions = {} } = {}) {
 }
 
 function showPage(page) {
+  const nextPage = pages[page];
+  if (!nextPage) return;
+  const previousPage = Object.values(pages).find((section) => section.classList.contains('active'));
+  if (previousPage !== nextPage) stopPageTransition();
+  const shouldAnimate = previousPage && previousPage !== nextPage
+    && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (shouldAnimate) {
+    const mainRect = previousPage.parentElement.getBoundingClientRect();
+    const previousRect = previousPage.getBoundingClientRect();
+    previousPage.style.top = `${previousRect.top - mainRect.top}px`;
+    previousPage.style.left = `${previousRect.left - mainRect.left}px`;
+    previousPage.style.width = `${previousRect.width}px`;
+    previousPage.style.height = `${previousRect.height}px`;
+    previousPage.classList.add('is-leaving');
+    previousPage.inert = true;
+    pageTransitionOutgoing = previousPage;
+  }
   if (page !== 'settings' && shortcutCaptureActive) cancelShortcutCapture();
   closeTaskTimePicker();
   navItems.forEach((navItem) => {
     navItem.classList.toggle('active', navItem.dataset.page === page);
   });
   Object.values(pages).forEach((section) => section.classList.remove('active'));
-  pages[page].classList.add('active');
+  nextPage.classList.add('active');
   pageTitle.textContent = pageTitleFor(page);
   if (goalManagerButton) goalManagerButton.classList.toggle('hidden', page !== 'tasks');
   if (page !== 'tasks') closeGoalDrawer();
@@ -5092,6 +5106,43 @@ function showPage(page) {
   if (page === 'records') showRecordsView('editor');
   if (page === 'profile') renderProfileStats();
   if (page === 'settings') clearSettingsPanel();
+  if (shouldAnimate) animatePageTransition(nextPage);
+}
+
+function stopPageTransition() {
+  pageTransitionToken += 1;
+  pageTransitionAnimations.forEach((animation) => animation.cancel());
+  pageTransitionAnimations = [];
+  if (pageTransitionOutgoing) {
+    pageTransitionOutgoing.classList.remove('is-leaving');
+    pageTransitionOutgoing.inert = false;
+    pageTransitionOutgoing.style.removeProperty('top');
+    pageTransitionOutgoing.style.removeProperty('left');
+    pageTransitionOutgoing.style.removeProperty('width');
+    pageTransitionOutgoing.style.removeProperty('height');
+    pageTransitionOutgoing = null;
+  }
+}
+
+function animatePageTransition(nextPage) {
+  const token = pageTransitionToken;
+  const timing = { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'both' };
+  const outgoing = pageTransitionOutgoing.animate(
+    [{ opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(-7px)' }],
+    timing
+  );
+  const incoming = nextPage.animate(
+    [{ opacity: 0, transform: 'translateY(9px)' }, { opacity: 1, transform: 'translateY(0)' }],
+    timing
+  );
+  const title = pageTitle.animate(
+    [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'translateY(0)' }],
+    { duration: 180, easing: 'ease-out', fill: 'both' }
+  );
+  pageTransitionAnimations = [outgoing, incoming, title];
+  Promise.allSettled(pageTransitionAnimations.map((animation) => animation.finished)).then(() => {
+    if (token === pageTransitionToken) stopPageTransition();
+  });
 }
 
 function showRecordsView(view) {
@@ -5813,14 +5864,18 @@ function renderTaskTemplateList() {
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
     deleteButton.className = 'task-template-delete-button';
-    deleteButton.textContent = '×';
+    deleteButton.textContent = '删除';
     deleteButton.title = `删除模板“${template.name}”`;
     deleteButton.setAttribute('aria-label', deleteButton.title);
     deleteButton.classList.toggle('hidden', reuseTemplateMode === 'import');
     deleteButton.addEventListener('click', async (event) => {
       event.stopPropagation();
       deleteButton.disabled = true;
-      await deleteTaskTemplate(template.id);
+      try {
+        await deleteTaskTemplate(template.id);
+      } finally {
+        if (deleteButton.isConnected) deleteButton.disabled = false;
+      }
     });
 
     const rowLayout = document.createElement('div');
@@ -5853,6 +5908,7 @@ async function deleteTaskTemplate(templateId) {
   const templates = taskTemplates();
   const template = templates.find((item) => item.id === templateId);
   if (!template) return;
+  if (!window.confirm(`确定删除模板“${template.name}”吗？此操作无法撤销。`)) return;
 
   const nextTemplates = templates.filter((item) => item.id !== templateId);
   const baseProfile = normalizedProfile();
@@ -6413,6 +6469,11 @@ function taskCrossesMidnight(task) {
 }
 
 function openTaskTimePicker(anchor, taskId, field, value, label, options = {}) {
+  if (activeTaskTimePicker) {
+    const sameAnchor = activeTaskTimePicker.anchor === anchor;
+    void confirmTaskTimePicker();
+    if (sameAnchor) return;
+  }
   const normalized = timeToMinutes(value) === null ? '00:00' : normalizeTime(value);
   activeTaskTimePicker = {
     anchor,
@@ -6426,6 +6487,7 @@ function openTaskTimePicker(anchor, taskId, field, value, label, options = {}) {
   taskTimePicker.classList.remove('hidden');
   positionTaskTimePicker();
   window.requestAnimationFrame(() => {
+    if (!activeTaskTimePicker || activeTaskTimePicker.anchor !== anchor) return;
     taskTimePickerHour.focus();
     taskTimePickerHour.select();
   });
@@ -8883,16 +8945,59 @@ async function addTaskCategory() {
 }
 
 async function moveTaskCategory(categoryId, offset) {
+  if (taskCategoryReorderInProgress) return;
   const categories = taskCategories();
   const index = categories.findIndex((category) => category.id === categoryId);
   const targetIndex = index + offset;
   if (index < 0 || targetIndex < 0 || targetIndex >= categories.length) return;
+  const moving = Array.from(taskCategorySettingsList?.children || [])
+    .find((item) => item.dataset.categoryId === categoryId);
+  const neighbor = Array.from(taskCategorySettingsList?.children || [])
+    .find((item) => item.dataset.categoryId === categories[targetIndex].id);
+  const beforeMoving = moving?.getBoundingClientRect();
+  const beforeNeighbor = neighbor?.getBoundingClientRect();
+
+  taskCategoryReorderInProgress = true;
+  updateTaskCategoryOrderButtons();
   [categories[index], categories[targetIndex]] = [categories[targetIndex], categories[index]];
   profile = { ...normalizedProfile(), taskCategories: categories };
-  await saveState();
-  renderTaskCategorySettings();
-  renderTasksPreservingScroll();
-  renderProfileStats();
+  if (moving && neighbor) {
+    if (offset < 0) neighbor.before(moving);
+    else neighbor.after(moving);
+  }
+
+  const animations = [];
+  if (moving && neighbor && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    for (const [item, before] of [[moving, beforeMoving], [neighbor, beforeNeighbor]]) {
+      const distance = before.top - item.getBoundingClientRect().top;
+      if (!distance) continue;
+      if (item === moving) item.classList.add('is-reordering');
+      animations.push(item.animate(
+        [{ transform: `translateY(${distance}px)` }, { transform: 'translateY(0)' }],
+        { duration: 280, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+      ).finished.catch(() => {}));
+    }
+  }
+
+  try {
+    await Promise.all([saveState(), ...animations]);
+    renderTasksPreservingScroll();
+    renderProfileStats();
+  } finally {
+    moving?.classList.remove('is-reordering');
+    taskCategoryReorderInProgress = false;
+    updateTaskCategoryOrderButtons();
+  }
+}
+
+function updateTaskCategoryOrderButtons() {
+  if (!taskCategorySettingsList) return;
+  const items = Array.from(taskCategorySettingsList.querySelectorAll('.task-category-settings-item'));
+  items.forEach((item, index) => {
+    const [up, down] = item.querySelectorAll('.task-category-order-button');
+    if (up) up.disabled = taskCategoryReorderInProgress || index === 0;
+    if (down) down.disabled = taskCategoryReorderInProgress || index === items.length - 1;
+  });
 }
 
 async function requestTaskCategoryDelete(categoryId) {
@@ -9229,7 +9334,7 @@ async function chooseStorageRoot() {
 
   changeStorageRootButton.disabled = true;
   changeStorageRootButton.textContent = '迁移中…';
-  setStatus('请选择新的日织存放位置；软件会在其下创建 rizhi/memory。迁移期间请勿关闭软件。', '');
+  setStatus('可选择上层文件夹、rizhi 文件夹或 memory 文件夹；软件会比较新旧内容。', '');
   try {
     const result = await window.whbr.chooseStorageRoot({ tasks, journals, profile });
     if (result.canceled) return;
@@ -9338,11 +9443,18 @@ function showStorageRootMigrationStatus(result) {
   const warnings = result && result.migration && Array.isArray(result.migration.cleanupWarnings)
     ? result.migration.cleanupWarnings
     : [];
+  const conflicts = result && result.migration && Array.isArray(result.migration.conflicts)
+    ? result.migration.conflicts
+    : [];
   if (warnings.length > 0) {
-    setStatus('本地内容已迁移，但旧位置有部分内容无法删除，请关闭占用文件后手动清理。', 'error', 7000);
+    setStatus('内容已迁移，但有部分文件需要核对；旧目录已保留。', 'error', 7000);
     return;
   }
-  setStatus('本地内容已迁移，原有文件结构已保留，旧位置中的内容已删除。', '', 6000);
+  if (conflicts.length > 0) {
+    setStatus(`已补充缺失内容；${conflicts.length} 项冲突保留新地址版本，旧目录已保留供核对。`, 'error', 9000);
+    return;
+  }
+  setStatus('已补充缺失内容；新地址原有数据未被覆盖，旧目录保留作备份。', '', 6000);
 }
 
 async function openMediaDirectory() {

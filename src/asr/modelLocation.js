@@ -93,7 +93,7 @@ async function copyVerifiedDirectory(source, target) {
 
 // Copy + verify works across drives. Persist only after promotion; until then
 // the old model remains untouched and is still the active installation.
-async function migrateModelDirectory({ app, modelId, source, selectedParent, validate }) {
+async function migrateModelDirectory({ app, modelId, source, selectedParent, validate, validateExisting }) {
   assertModelDirectory(source, modelId);
   if (!path.isAbsolute(selectedParent)) throw new Error('请选择绝对路径的模型存放文件夹。');
   await fs.mkdir(selectedParent, { recursive: true });
@@ -109,8 +109,14 @@ async function migrateModelDirectory({ app, modelId, source, selectedParent, val
   if (path.relative(resolvedSource, destination) === '') return { directory: source, unchanged: true };
   if (pathsOverlap(resolvedSource, destination)) throw new Error('新旧模型目录不能互相包含。');
   const targetStat = await statIfExists(destination);
-  if (targetStat && (!targetStat.isDirectory() || targetStat.isSymbolicLink() || (await fs.readdir(destination)).length)) {
-    throw new Error('目标模型目录已包含文件，请选择其他文件夹；不会覆盖已有内容。');
+  if (targetStat && (!targetStat.isDirectory() || targetStat.isSymbolicLink())) {
+    throw new Error('目标模型目录不是普通文件夹；不会覆盖已有内容。');
+  }
+  if (targetStat && (await fs.readdir(destination)).length) {
+    if (!validateExisting && !validate) throw new Error('目标模型目录已包含文件，无法验证；不会覆盖已有内容。');
+    await (validateExisting || validate)(destination);
+    await writeModelLocation(app, modelId, destination);
+    return { directory: destination, reusedExisting: true, cleanupWarning: '' };
   }
 
   let staging = '';
@@ -133,13 +139,7 @@ async function migrateModelDirectory({ app, modelId, source, selectedParent, val
     if (promoted && !saved) await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
   }
 
-  let cleanupWarning = '';
-  if (sourceStat) {
-    assertModelDirectory(resolvedSource, modelId);
-    try { await fs.rm(resolvedSource, { recursive: true }); }
-    catch (error) { cleanupWarning = `新路径已生效，但旧模型目录未能清理：${source}（${error.message}）。可退出软件后手动清理。`; }
-  }
-  return { directory: destination, migrated: Boolean(sourceStat), cleanupWarning };
+  return { directory: destination, migrated: Boolean(sourceStat), cleanupWarning: '' };
 }
 
 module.exports = { readModelLocation, migrateModelDirectory };

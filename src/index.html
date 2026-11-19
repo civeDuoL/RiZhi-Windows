@@ -673,7 +673,7 @@
             <button id="createTasksManualButton" class="create-task-action-button" type="button" data-create-task-view="compose">编排任务</button>
             <button id="reuseTemplateFromMenuButton" class="create-task-action-button" type="button" data-create-task-view="templates">任务模板</button>
           </nav>
-          <button id="closeTemplateMenuModalButton" class="icon-button" aria-label="关闭">×</button>
+          <button id="closeTemplateMenuModalButton" class="secondary-button task-modal-close-button" type="button">关闭</button>
         </div>
         <div id="createTaskDetailPanel" class="create-task-detail-panel">
           <div id="createTaskPlaceholder" class="create-task-placeholder">
@@ -691,7 +691,7 @@
             <p class="eyebrow">安排模板</p>
             <h2 id="saveTaskTemplateTitle">保存模板</h2>
           </div>
-          <button id="closeSaveTaskTemplateModalButton" class="icon-button" aria-label="关闭">×</button>
+          <button id="closeSaveTaskTemplateModalButton" class="secondary-button task-modal-close-button" type="button">关闭</button>
         </div>
 
         <form id="saveTaskTemplateForm" class="manual-form">
@@ -718,7 +718,7 @@
           </div>
           <div class="modal-header-actions">
             <button id="createTaskTemplateButton" class="secondary-button" type="button">新建模板</button>
-            <button id="closeReuseTemplateModalButton" class="icon-button" aria-label="关闭">×</button>
+            <button id="closeReuseTemplateModalButton" class="secondary-button task-modal-close-button" type="button">关闭</button>
           </div>
         </div>
 
@@ -1011,22 +1011,15 @@
       <div class="task-time-picker-fields">
         <label class="task-time-picker-field">
           <span>小时</span>
-          <button type="button" class="task-time-step-button" data-time-unit="hour" data-time-step="1" aria-label="小时增加">&#9650;</button>
           <input id="taskTimePickerHour" type="text" inputmode="numeric" maxlength="2" autocomplete="off" aria-label="小时" />
-          <button type="button" class="task-time-step-button" data-time-unit="hour" data-time-step="-1" aria-label="小时减少">&#9660;</button>
         </label>
         <span class="task-time-picker-separator">:</span>
         <label class="task-time-picker-field">
           <span>分钟</span>
-          <button type="button" class="task-time-step-button" data-time-unit="minute" data-time-step="1" aria-label="分钟增加">&#9650;</button>
           <input id="taskTimePickerMinute" type="text" inputmode="numeric" maxlength="2" autocomplete="off" aria-label="分钟" />
-          <button type="button" class="task-time-step-button" data-time-unit="minute" data-time-step="-1" aria-label="分钟减少">&#9660;</button>
         </label>
       </div>
-      <div class="task-time-picker-actions">
-        <button id="cancelTaskTimePickerButton" class="secondary-button" type="button">取消</button>
-        <button id="confirmTaskTimePickerButton" class="primary-button" type="button">确定</button>
-      </div>
+      <p class="task-time-picker-hint">可用滚轮调整，点击外部或按 Enter 保存</p>
     </section>
 
     <div id="tutorialConfirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="tutorialConfirmTitle">

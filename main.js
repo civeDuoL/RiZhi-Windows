@@ -7,7 +7,8 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const fsSync = require('fs');
 const fs = require('fs/promises');
-const { getStoragePaths, loadData, resetData, saveData, setStorageRoot } = require('./src/storage/localDataStore');
+const { getDefaultMemoryDir, getStoragePaths, loadData, resetData, saveData, setStorageRoot, previewStorageRoot } = require('./src/storage/localDataStore');
+const { resolveSelectedMemoryRoot } = require('./src/storage/storagePathSelection');
 const { createAsrModelManager } = require('./src/asr/modelManager');
 const { createAsrService } = require('./src/asr/asrService');
 const ffmpegStaticPath = require('ffmpeg-static');
@@ -2138,31 +2139,35 @@ ipcMain.handle('storage:chooseRoot', async (event, data) => {
   const oldRoot = path.resolve(oldPaths.storageRoot || oldPaths.dataDirectory);
   const selection = await dialog.showOpenDialog(mainWindow, {
     title: '选择新的日织存放位置',
-    defaultPath: oldRoot,
+    defaultPath: path.dirname(getDefaultMemoryDir(app)),
     properties: ['openDirectory', 'createDirectory']
   });
   if (selection.canceled || !selection.filePaths.length) return { canceled: true };
 
-  // 用户选择的是上层位置；日织固定在其下建立 rizhi/memory，避免
-  // 与用户其他文件混放，也让“程序目录 / memory”结构保持稳定。
-  const targetRoot = path.resolve(selection.filePaths[0], 'rizhi', 'memory');
+  // 允许选择上层目录、rizhi 目录或其 memory 目录，不重复追加路径。
+  const targetRoot = resolveSelectedMemoryRoot(selection.filePaths[0]);
   if (sameResolvedPath(oldRoot, targetRoot)) return { canceled: true };
   if (targetRoot === path.parse(targetRoot).root) throw new Error('不能将磁盘根目录直接设为日织内容存放位置。');
-  if (pathsOverlap(oldRoot, targetRoot) || pathsOverlap(manager.getDownloadDirectory(), targetRoot)) {
-    throw new Error('新旧存放位置不能互相包含，请选择独立的空文件夹。');
+  if (pathContains(oldRoot, targetRoot) || pathContains(manager.getDownloadDirectory(), targetRoot)) {
+    throw new Error('新位置不能位于当前数据或模型目录内部。');
   }
-  await fs.mkdir(targetRoot, { recursive: true });
-  if ((await fs.readdir(targetRoot)).length > 0) throw new Error('新存放位置必须是空文件夹。');
+  const preview = await previewStorageRoot(app, targetRoot, data);
 
   const targetModelParent = path.join(targetRoot, 'models', 'asr');
   const targetModelDirectory = path.join(targetModelParent, manager.modelConfig.modelId);
+  const conflictLines = preview.conflicts.slice(0, 30).map((item) => `• ${item}`);
+  if (preview.conflicts.length > conflictLines.length) {
+    conflictLines.push(`…另有 ${preview.conflicts.length - conflictLines.length} 项差异，均不会覆盖目标内容。`);
+  }
   const confirmation = await dialog.showMessageBox(mainWindow, {
     type: 'warning',
     title: '迁移日织本地内容',
-    message: '是否将全部日织本地内容迁移到新文件夹？',
-    detail: `旧目录：${oldRoot}\n新目录：${targetRoot}\n\n文字、设置与照片视频会按现有月份目录完整迁移；成功后会清理旧位置。迁移期间请勿关闭软件。`,
-    buttons: ['迁移并清理旧位置', '取消'],
-    defaultId: 0,
+    message: preview.conflicts.length
+      ? `发现 ${preview.conflicts.length} 项内容差异。保留目标版本，差异文件另存。`
+      : '只补充目标地址缺失的内容，不覆盖已有数据。是否继续？',
+    detail: `旧目录：${oldRoot}\n新目录：${targetRoot}\n\n预计新增：任务 ${preview.added.tasks} 条、记录 ${preview.added.journals} 条、文件 ${preview.added.files} 个。\n${conflictLines.length ? `\n内容差异及处理方式：\n${conflictLines.join('\n')}\n` : ''}\n同月份 JSON 会合并写入，写入前保留原文件备份。迁移后旧目录也会保留。`,
+    buttons: ['只补充缺失内容', '取消'],
+    defaultId: 1,
     cancelId: 1,
     noLink: true
   });
@@ -2209,12 +2214,9 @@ function sameResolvedPath(first, second) {
   return normalizeForComparison(first) === normalizeForComparison(second);
 }
 
-function pathsOverlap(first, second) {
-  const contains = (parent, child) => {
-    const relative = path.relative(path.resolve(parent), path.resolve(child));
-    return !relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
-  };
-  return contains(first, second) || contains(second, first);
+function pathContains(parent, child) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return !relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 ipcMain.handle('data:openDirectory', async () => {

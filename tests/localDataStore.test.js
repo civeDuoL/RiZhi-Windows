@@ -5,9 +5,11 @@ const path = require('path');
 const {
   getDefaultMemoryDir,
   getStoragePaths,
+  previewStorageRoot,
   saveData,
   setStorageRoot
 } = require('../src/storage/localDataStore');
+const { resolveSelectedMemoryRoot } = require('../src/storage/storagePathSelection');
 
 (async () => {
   const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rizhi-storage-test-'));
@@ -30,6 +32,10 @@ const {
       return path.join(testRoot, 'chosen', 'rizhi', 'rizhi', '日织.exe');
     }
   }), path.join(testRoot, 'chosen', 'rizhi', 'memory'));
+  const selectedAppRoot = path.join(testRoot, 'chosen', 'rizhi');
+  assert.equal(resolveSelectedMemoryRoot(path.dirname(selectedAppRoot)), path.join(selectedAppRoot, 'memory'));
+  assert.equal(resolveSelectedMemoryRoot(selectedAppRoot), path.join(selectedAppRoot, 'memory'));
+  assert.equal(resolveSelectedMemoryRoot(path.join(selectedAppRoot, 'memory')), path.join(selectedAppRoot, 'memory'));
 
   try {
     const initialPaths = await getStoragePaths(app);
@@ -89,15 +95,74 @@ const {
     assert.deepEqual(migratedMonth.journals[0].tagIds, ['legacy-3', 'legacy-5']);
     assert.equal(Object.hasOwn(migratedMonth.journals[0], 'tagId'), false);
     assert.equal(await fs.readFile(path.join(migratedMediaRoot, ...mediaRelativePath.split('/')), 'utf8'), 'media-one');
-    await assert.rejects(fs.access(initialMediaFile), /ENOENT/);
-    await assert.rejects(fs.access(path.join(initialPaths.dataDirectory, '2026-09', 'rizhi-data-2026-09.json')), /ENOENT/);
+    assert.equal(await fs.readFile(initialMediaFile, 'utf8'), 'media-one');
+    assert.equal(JSON.parse(await fs.readFile(path.join(initialPaths.dataDirectory, '2026-09', 'rizhi-data-2026-09.json'), 'utf8')).tasks.length, 1);
     assert.equal(await fs.readFile(path.join(nextStorageRoot, 'keep-me.txt'), 'utf8'), 'user-file');
     assert.equal(await fs.readFile(path.join(nextStorageRoot, 'custom', 'nested', 'keep-too.txt'), 'utf8'), 'nested-user-file');
-    await assert.rejects(fs.access(initialPaths.dataDirectory), /ENOENT/);
+    assert.equal(await fs.readFile(unrelatedFile, 'utf8'), 'user-file');
 
     const reloadedPaths = await getStoragePaths(app);
     assert.equal(reloadedPaths.storageRoot, nextStorageRoot);
     assert.equal(reloadedPaths.mediaDirectory, migratedMediaRoot);
+
+    const occupiedRoot = path.join(testRoot, 'occupied-root');
+    const occupiedMonth = path.join(occupiedRoot, '2026-09');
+    await fs.mkdir(path.join(occupiedMonth, '2026-09-26'), { recursive: true });
+    await fs.writeFile(path.join(occupiedMonth, 'rizhi-data-2026-09.json'), JSON.stringify({
+      version: 2,
+      tasks: [
+        { ...data.tasks[0], title: '目标地址版本' },
+        { id: 'target-task', date: '2026-09-27', title: '仅在目标地址' }
+      ],
+      journals: [],
+      profile: { classDuration: 45, targetOnlySetting: true }
+    }));
+    await fs.writeFile(path.join(occupiedMonth, '2026-09-26', 'photo.jpg'), 'target-media');
+    const untouchedMonth = path.join(occupiedRoot, '2026-10', 'rizhi-data-2026-10.json');
+    await fs.mkdir(path.dirname(untouchedMonth), { recursive: true });
+    await fs.writeFile(untouchedMonth, JSON.stringify({ tasks: [{ id: 'october-task', date: '2026-10-01', title: '十月任务' }], journals: [], profile: {} }));
+    await fs.writeFile(path.join(occupiedRoot, 'rizhi-settings.json'), JSON.stringify({ profile: { classDuration: 45, targetOnlySetting: true } }));
+    const planned = await previewStorageRoot(app, occupiedRoot, dataMigration.data);
+    assert.equal(planned.added.journals, 1);
+    assert.ok(planned.conflicts.some((item) => item.includes('任务 ID task-1')));
+    assert.ok(planned.conflicts.some((item) => item.includes('photo.jpg')));
+
+    const mergedMigration = await setStorageRoot(app, occupiedRoot, dataMigration.data);
+    assert.equal(mergedMigration.data.tasks.find((item) => item.id === 'task-1').title, '目标地址版本');
+    assert.equal(mergedMigration.data.tasks.find((item) => item.id === 'target-task').title, '仅在目标地址');
+    assert.equal(mergedMigration.data.tasks.find((item) => item.id === 'october-task').title, '十月任务');
+    assert.equal(mergedMigration.data.journals.length, 1);
+    assert.equal(mergedMigration.data.profile.classDuration, 45);
+    assert.equal(mergedMigration.data.profile.targetOnlySetting, true);
+    assert.equal(await fs.readFile(path.join(occupiedMonth, '2026-09-26', 'photo.jpg'), 'utf8'), 'target-media');
+    const copiedMedia = mergedMigration.data.journals[0].media[0];
+    assert.notEqual(copiedMedia.sourcePath, mediaRelativePath);
+    assert.equal(await fs.readFile(path.join(occupiedRoot, ...copiedMedia.sourcePath.split('/')), 'utf8'), 'media-one');
+    assert.equal(await fs.readFile(path.join(nextStorageRoot, ...mediaRelativePath.split('/')), 'utf8'), 'media-one');
+    assert.ok(mergedMigration.migration.conflicts.some((item) => item.includes('photo.jpg')));
+    assert.ok((await fs.readdir(occupiedMonth)).some((name) => name.startsWith('rizhi-data-2026-09.json.before-migration-')));
+    assert.ok((await fs.readdir(occupiedRoot)).some((name) => name.startsWith('rizhi-settings.json.before-migration-')));
+    assert.equal(JSON.parse(await fs.readFile(untouchedMonth, 'utf8')).tasks[0].title, '十月任务');
+
+    const corruptRoot = path.join(testRoot, 'corrupt-target');
+    await fs.mkdir(path.join(corruptRoot, '2026-09'), { recursive: true });
+    await fs.writeFile(path.join(corruptRoot, '2026-09', 'rizhi-data-2026-09.json'), '{invalid');
+    await assert.rejects(previewStorageRoot(app, corruptRoot, mergedMigration.data), /无法读取目标数据文件/);
+    assert.equal((await getStoragePaths(app)).dataDirectory, occupiedRoot);
+
+    const nestedApp = {
+      isPackaged: false,
+      getPath: () => path.join(testRoot, 'nested-user-data'),
+      getAppPath: () => path.join(testRoot, 'nested-app')
+    };
+    await saveData(nestedApp, data);
+    const intendedMemory = path.join(testRoot, 'nested-layout', 'rizhi', 'memory');
+    const accidentalMemory = path.join(intendedMemory, 'rizhi', 'memory');
+    const accidental = await setStorageRoot(nestedApp, accidentalMemory, data);
+    const restored = await setStorageRoot(nestedApp, intendedMemory, accidental.data);
+    assert.equal(restored.paths.dataDirectory, intendedMemory);
+    assert.equal(restored.data.tasks[0].title, '测试任务');
+    assert.equal((await fs.stat(accidentalMemory)).isDirectory(), true);
 
     console.log('localDataStore migration tests passed');
   } finally {

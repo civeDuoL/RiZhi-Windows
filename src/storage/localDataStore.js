@@ -1,5 +1,7 @@
 const fsSync = require('fs');
 const fs = require('fs/promises');
+const crypto = require('crypto');
+const { isDeepStrictEqual } = require('util');
 const { legacyRatingToTagId, normalizeJournalTagIds } = require('../shared/journalTags');
 const path = require('path');
 
@@ -278,49 +280,316 @@ async function setMediaDirectory(app, mediaDirectory, currentData) {
   }
 }
 
-async function setStorageRoot(app, storageRoot, currentData) {
+async function previewStorageRoot(app, storageRoot, currentData) {
   await migrateStorageNames(app);
   const oldPaths = await getStoragePaths(app);
   const targetRoot = path.resolve(storageRoot);
   if (samePath(oldPaths.dataDirectory, targetRoot)) {
-    const result = await loadData(app);
-    return {
-      ...result,
-      migration: { from: oldPaths.dataDirectory, to: targetRoot, skipped: true, deleted: [], cleanupWarnings: [] }
-    };
+    return { from: oldPaths.dataDirectory, to: targetRoot, skipped: true, added: { tasks: 0, journals: 0, files: 0 }, conflicts: [] };
+  }
+  assertNonNestedMigrationPaths(oldPaths.dataDirectory, targetRoot);
+  const sourceData = normalizeData(currentData || (await loadData(app)).data);
+  const target = await readStorageDirectoryStrict(targetRoot);
+  const conflicts = [];
+  if (target.settings.mediaDirectory && !samePath(target.settings.mediaDirectory, targetRoot)) {
+    conflicts.push(`目标设置使用独立媒体目录 ${target.settings.mediaDirectory}，迁移后继续保留该路径`);
+  }
+  const files = await scanStorageFiles(oldPaths.dataDirectory, targetRoot);
+  if (!samePath(oldPaths.mediaDirectory, oldPaths.dataDirectory)) {
+    const media = await scanStorageFiles(oldPaths.mediaDirectory, targetRoot, { mediaOnly: true });
+    files.added.push(...media.added);
+    conflicts.push(...media.conflicts);
+    Object.assign(files.renamed, media.renamed);
+  }
+  const merged = mergeStorageData(
+    rewriteMediaRoots(sourceData, oldPaths.mediaDirectory, targetRoot, files.renamed),
+    target.data,
+    conflicts
+  );
+  mergeMissingValues(migrationSettings(target.settings), migrationSettings(await readSettings(app)), '设置', conflicts);
+  conflicts.push(...files.conflicts);
+  return {
+    from: oldPaths.dataDirectory,
+    to: targetRoot,
+    skipped: false,
+    added: { tasks: merged.added.tasks, journals: merged.added.journals, files: files.added.length },
+    conflicts: [...new Set(conflicts)]
+  };
+}
+
+async function setStorageRoot(app, storageRoot, currentData) {
+  const preview = await previewStorageRoot(app, storageRoot, currentData);
+  if (preview.skipped) return { ...(await loadData(app)), migration: { ...preview, deleted: [], cleanupWarnings: [] } };
+  const oldPaths = await getStoragePaths(app);
+  const targetRoot = preview.to;
+  const sourceData = normalizeData(currentData || (await loadData(app)).data);
+  const target = await readStorageDirectoryStrict(targetRoot);
+  const files = await scanStorageFiles(oldPaths.dataDirectory, targetRoot);
+  if (!samePath(oldPaths.mediaDirectory, oldPaths.dataDirectory)) {
+    const media = await scanStorageFiles(oldPaths.mediaDirectory, targetRoot, { mediaOnly: true });
+    Object.assign(files.renamed, media.renamed);
+  }
+  const conflicts = [];
+  if (target.settings.mediaDirectory && !samePath(target.settings.mediaDirectory, targetRoot)) {
+    conflicts.push(`目标设置使用独立媒体目录 ${target.settings.mediaDirectory}，迁移后继续保留该路径`);
+  }
+  const merged = mergeStorageData(
+    rewriteMediaRoots(sourceData, oldPaths.mediaDirectory, targetRoot, files.renamed),
+    target.data,
+    conflicts
+  );
+  const sourceSettings = await readSettings(app);
+  const nextSettings = mergeMissingValues(migrationSettings(target.settings), migrationSettings(sourceSettings), '设置', conflicts);
+  nextSettings.profile = merged.data.profile;
+  nextSettings.dataDirectory = targetRoot;
+  nextSettings.dataFilePath = undefined;
+  nextSettings.settingsFilePath = path.join(targetRoot, SETTINGS_FILE_NAME);
+  if (target.settings.mediaDirectory && !samePath(target.settings.mediaDirectory, targetRoot)) {
+    nextSettings.mediaDirectory = target.settings.mediaDirectory;
+  } else {
+    delete nextSettings.mediaDirectory;
   }
 
-  assertNonNestedMigrationPaths(oldPaths.dataDirectory, targetRoot);
-  let dataMigration = null;
-  try {
-    dataMigration = await setStorageDirectory(app, targetRoot, currentData);
-    const targetMediaDirectory = targetRoot;
-    const mediaMigration = samePath(dataMigration.paths.mediaDirectory, targetMediaDirectory)
-      ? dataMigration
-      : await setMediaDirectory(app, targetMediaDirectory, dataMigration.data);
-    const remainingMigration = await moveRemainingDirectoryContents(oldPaths.dataDirectory, targetRoot);
-    const migrations = [dataMigration.migration, mediaMigration === dataMigration ? null : mediaMigration.migration]
-      .filter(Boolean);
+  await fs.mkdir(targetRoot, { recursive: true });
+  const copied = await copyStorageFilesWithoutOverwrite(oldPaths.dataDirectory, targetRoot);
+  if (!samePath(oldPaths.mediaDirectory, oldPaths.dataDirectory)) {
+    const mediaCopied = await copyStorageFilesWithoutOverwrite(oldPaths.mediaDirectory, targetRoot, { mediaOnly: true });
+    copied.added.push(...mediaCopied.added);
+    conflicts.push(...mediaCopied.conflicts);
+    Object.assign(copied.renamed, mediaCopied.renamed);
+  }
+  conflicts.push(...copied.conflicts);
+  if (!isDeepStrictEqual(copied.renamed, files.renamed)) {
+    throw new Error('目标文件在预览后发生变化，迁移已停止，请重新选择。');
+  }
+  const latestTarget = await readStorageDirectoryStrict(targetRoot);
+  if (!isDeepStrictEqual(latestTarget.data, target.data)
+    || !isDeepStrictEqual(latestTarget.settings, target.settings)) {
+    throw new Error('目标数据在迁移过程中发生变化，迁移已停止，请重新选择。');
+  }
+  await writeMonthlyDataFiles(targetRoot, merged.data, new Date().toISOString(), { preserveExistingMonths: true });
+  const settingsFilePath = path.join(targetRoot, SETTINGS_FILE_NAME);
+  await backupExistingFile(settingsFilePath);
+  await writeJsonAtomically(settingsFilePath, nextSettings);
+  await validateStorageTarget(targetRoot, settingsFilePath);
+  const locationPath = getSettingsLocationPath(app);
+  await fs.mkdir(path.dirname(locationPath), { recursive: true });
+  await writeJsonAtomically(locationPath, { settingsFilePath });
+  const result = await loadData(app);
+  return {
+    ...result,
+    migration: {
+      from: oldPaths.dataDirectory,
+      to: targetRoot,
+      added: { tasks: merged.added.tasks, journals: merged.added.journals, files: copied.added.length },
+      conflicts: [...new Set(conflicts)],
+      deleted: [],
+      cleanupWarnings: []
+    }
+  };
+}
 
-    return {
-      ...mediaMigration,
-      paths: { ...mediaMigration.paths, storageRoot: targetRoot },
-      migration: {
-        from: oldPaths.dataDirectory,
-        to: targetRoot,
-        deleted: [...new Set(migrations.flatMap((item) => item.deleted || []).concat(remainingMigration.deleted))],
-        cleanupWarnings: migrations.flatMap((item) => item.cleanupWarnings || []).concat(remainingMigration.cleanupWarnings)
-      }
-    };
+async function readStorageDirectoryStrict(directory) {
+  const settingsPath = path.join(directory, SETTINGS_FILE_NAME);
+  const settings = await readOptionalJsonStrict(settingsPath) || {};
+  const legacy = await readOptionalJsonStrict(path.join(directory, LEGACY_DATA_FILE_NAME));
+  const monthlyFiles = await listMonthlyDataFiles(directory);
+  const shards = await Promise.all(monthlyFiles.map((filePath) => readOptionalJsonStrict(filePath)));
+  const combined = createDefaultData();
+  combined.updatedAt = '';
+  for (const shard of [legacy, ...shards]) {
+    if (!shard) continue;
+    if ((shard.tasks !== undefined && !Array.isArray(shard.tasks))
+      || (shard.journals !== undefined && !Array.isArray(shard.journals))) {
+      throw new Error('目标目录的数据格式无效，迁移已停止。');
+    }
+    combined.tasks.push(...(shard.tasks || []));
+    combined.journals.push(...(shard.journals || []));
+    combined.profile = { ...combined.profile, ...(shard.profile || {}) };
+    if (shard.updatedAt) combined.updatedAt = shard.updatedAt;
+  }
+  combined.profile = { ...combined.profile, ...(settings.profile || {}) };
+  combined.tasks = dedupeById(combined.tasks);
+  combined.journals = dedupeById(combined.journals);
+  return { data: combined, settings };
+}
+
+function migrationSettings(settings) {
+  const { dataDirectory, dataFilePath, settingsFilePath, mediaDirectory, ...content } = settings || {};
+  return content;
+}
+
+async function readOptionalJsonStrict(filePath) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8'));
   } catch (error) {
-    if (dataMigration) {
-      try {
-        await setStorageDirectory(app, oldPaths.dataDirectory, dataMigration.data);
-      } catch (rollbackError) {
-        error.message = `${error.message}；数据回退失败：${rollbackError.message}`;
+    if (error.code === 'ENOENT') return null;
+    throw new Error(`无法读取目标数据文件 ${filePath}：${error.message}`);
+  }
+}
+
+function mergeStorageData(source, target, conflicts) {
+  const tasks = mergeRecordList(target.tasks, source.tasks, '任务', conflicts);
+  const journals = mergeRecordList(target.journals, source.journals, '记录', conflicts);
+  return {
+    data: {
+      ...target,
+      version: Math.max(target.version, source.version),
+      tasks: tasks.items,
+      journals: journals.items,
+      profile: mergeMissingValues(target.profile, source.profile, '设置', conflicts)
+    },
+    added: { tasks: tasks.added, journals: journals.added }
+  };
+}
+
+function mergeRecordList(targetItems, sourceItems, label, conflicts) {
+  const items = [...targetItems];
+  const existing = new Map(targetItems.map((item) => [item && item.id ? item.id : JSON.stringify(item), item]));
+  let added = 0;
+  for (const item of sourceItems) {
+    const key = item && item.id ? item.id : JSON.stringify(item);
+    if (!existing.has(key)) {
+      items.push(item);
+      existing.set(key, item);
+      added += 1;
+    } else if (!isDeepStrictEqual(existing.get(key), item)) {
+      conflicts.push(`${label} ID ${key}`);
+    }
+  }
+  return { items, added };
+}
+
+function mergeMissingValues(target, source, label, conflicts) {
+  if (target === undefined) return structuredClone(source);
+  if (source === undefined) return target;
+  if (isDeepStrictEqual(target, source)) return target;
+  if (Array.isArray(target) && Array.isArray(source)) {
+    if (target.length === 0) return structuredClone(source);
+    if (source.length === 0) return target;
+    if (target.every((item) => item && typeof item === 'object' && item.id)
+      && source.every((item) => item && typeof item === 'object' && item.id)) {
+      return mergeRecordList(target, source, label, conflicts).items;
+    }
+    conflicts.push(label);
+    return target;
+  }
+  if (target && source && typeof target === 'object' && typeof source === 'object'
+    && !Array.isArray(target) && !Array.isArray(source)) {
+    const merged = { ...target };
+    for (const [key, value] of Object.entries(source)) {
+      merged[key] = mergeMissingValues(target[key], value, `${label}.${key}`, conflicts);
+    }
+    return merged;
+  }
+  conflicts.push(label);
+  return target;
+}
+
+async function scanStorageFiles(sourceRoot, targetRoot, options = {}) {
+  return walkStorageFiles(sourceRoot, targetRoot, options, false);
+}
+
+async function copyStorageFilesWithoutOverwrite(sourceRoot, targetRoot, options = {}) {
+  return walkStorageFiles(sourceRoot, targetRoot, options, true);
+}
+
+async function walkStorageFiles(sourceRoot, targetRoot, options, copy) {
+  const added = [];
+  const conflicts = [];
+  const renamed = {};
+  if (!(await fileExists(sourceRoot))) return { added, conflicts, renamed };
+  assertNonNestedMigrationPaths(sourceRoot, targetRoot);
+  async function visit(relative = '') {
+    const source = path.join(sourceRoot, relative);
+    const entries = await fs.readdir(source, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!relative && (entry.name === 'models' || entry.name === '.upload-staging')) continue;
+      if (!relative && options.mediaOnly && !MEDIA_MONTH_DIRECTORY_REGEX.test(entry.name)) continue;
+      if (entry.name === SETTINGS_FILE_NAME || entry.name === LEGACY_SETTINGS_FILE_NAME
+        || entry.name === LEGACY_DATA_FILE_NAME || DATA_FILE_REGEX.test(entry.name)) continue;
+      const nextRelative = path.join(relative, entry.name);
+      const from = path.join(sourceRoot, nextRelative);
+      const to = path.join(targetRoot, nextRelative);
+      const sourceInsideDestination = path.relative(to, sourceRoot);
+      if (!sourceInsideDestination || (sourceInsideDestination !== '..'
+        && !sourceInsideDestination.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(sourceInsideDestination))) {
+        throw new Error(`目标子目录 ${to} 包含原数据目录，无法安全合并。`);
+      }
+      const targetStat = await statIfExists(to);
+      if (entry.isDirectory()) {
+        if (targetStat && !targetStat.isDirectory()) {
+          throw new Error(`目标位置的 ${nextRelative} 是文件，无法合并目录。`);
+        }
+        if (copy) await fs.mkdir(to, { recursive: true });
+        await visit(nextRelative);
+      } else if (entry.isFile()) {
+        if (targetStat) {
+          if (!targetStat.isFile()) throw new Error(`目标位置的 ${nextRelative} 是目录，无法合并文件。`);
+          if (!(await sameFileContent(from, to))) {
+            const digest = await fileDigest(from);
+            const alternate = path.join(path.dirname(nextRelative), `${path.parse(nextRelative).name}.source-${digest.slice(0, 16)}${path.extname(nextRelative)}`);
+            const alternatePath = path.join(targetRoot, alternate);
+            const alternateStat = await statIfExists(alternatePath);
+            if (alternateStat && (!alternateStat.isFile() || !(await sameFileContent(from, alternatePath)))) {
+              throw new Error(`冲突副本 ${alternate} 已存在且内容不同，迁移已停止。`);
+            }
+            renamed[nextRelative.replace(/\\/g, '/')] = alternate.replace(/\\/g, '/');
+            conflicts.push(`文件 ${nextRelative} 不同，来源另存为 ${alternate}`);
+            if (!alternateStat) {
+              added.push(alternate);
+              if (copy) {
+                await fs.mkdir(path.dirname(alternatePath), { recursive: true });
+                await fs.copyFile(from, alternatePath, fsSync.constants.COPYFILE_EXCL);
+              }
+            }
+          }
+        } else {
+          added.push(nextRelative);
+          if (copy) {
+            await fs.mkdir(path.dirname(to), { recursive: true });
+            await fs.copyFile(from, to, fsSync.constants.COPYFILE_EXCL);
+          }
+        }
+      } else {
+        throw new Error(`原目录包含不支持迁移的特殊文件 ${nextRelative}。`);
       }
     }
-    throw error;
+  }
+  await visit();
+  return { added, conflicts, renamed };
+}
+
+async function sameFileContent(first, second) {
+  const [firstStat, secondStat] = await Promise.all([fs.stat(first), fs.stat(second)]);
+  if (firstStat.size !== secondStat.size) return false;
+  const [firstHash, secondHash] = await Promise.all([fileDigest(first), fileDigest(second)]);
+  return firstHash === secondHash;
+}
+
+function fileDigest(filePath) {
+  return new Promise((resolve, reject) => {
+    const stream = fsSync.createReadStream(filePath);
+    const digest = crypto.createHash('sha256');
+    stream.on('data', (chunk) => digest.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(digest.digest('hex')));
+  });
+}
+
+async function backupExistingFile(filePath) {
+  if (!(await fileExists(filePath))) return;
+  await fs.copyFile(filePath, `${filePath}.before-migration-${crypto.randomUUID()}.bak`, fsSync.constants.COPYFILE_EXCL);
+}
+
+async function writeJsonAtomically(filePath, value) {
+  const temporary = `${filePath}.${crypto.randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporary, JSON.stringify(value, null, 2), { encoding: 'utf8', flag: 'wx' });
+    await fs.rename(temporary, filePath);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {});
   }
 }
 
@@ -381,7 +650,7 @@ async function statIfExists(targetPath) {
   }
 }
 
-function rewriteMediaRoots(data, oldRoot, newRoot) {
+function rewriteMediaRoots(data, oldRoot, newRoot, renamed = {}) {
   const normalized = normalizeData(data);
   return {
     ...normalized,
@@ -392,7 +661,12 @@ function rewriteMediaRoots(data, oldRoot, newRoot) {
           if (!item || typeof item !== 'object') return item;
           const itemRoot = item.mediaRoot ? path.resolve(item.mediaRoot) : path.resolve(oldRoot);
           if (!samePath(itemRoot, oldRoot)) return item;
-          return { ...item, mediaRoot: path.resolve(newRoot) };
+          const updated = { ...item, mediaRoot: path.resolve(newRoot) };
+          for (const field of ['sourcePath', 'previewPath', 'thumbnailPath', 'motionSourcePath', 'motionPreviewPath']) {
+            const relative = typeof updated[field] === 'string' ? updated[field].replace(/\\/g, '/') : '';
+            if (renamed[relative]) updated[field] = renamed[relative];
+          }
+          return updated;
         })
         : journal.media
     }))
@@ -418,10 +692,10 @@ function assertNonNestedMigrationPaths(sourceRoot, targetRoot) {
   const source = path.resolve(sourceRoot);
   const target = path.resolve(targetRoot);
   const targetInsideSource = path.relative(source, target);
-  const sourceInsideTarget = path.relative(target, source);
-  if ((targetInsideSource && !targetInsideSource.startsWith('..') && !path.isAbsolute(targetInsideSource))
-    || (sourceInsideTarget && !sourceInsideTarget.startsWith('..') && !path.isAbsolute(sourceInsideTarget))) {
-    throw new Error('新旧存放文件夹不能互相包含，请选择独立的文件夹。');
+  if (!targetInsideSource || (targetInsideSource !== '..'
+    && !targetInsideSource.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(targetInsideSource))) {
+    throw new Error('新位置不能位于原数据目录内部。');
   }
 }
 
@@ -802,7 +1076,7 @@ async function readLegacyData(dataDirectory) {
   }
 }
 
-async function writeMonthlyDataFiles(dataDirectory, data, updatedAt) {
+async function writeMonthlyDataFiles(dataDirectory, data, updatedAt, options = {}) {
   const existingFiles = await listMonthlyDataFiles(dataDirectory);
   const byMonth = new Map();
 
@@ -824,9 +1098,18 @@ async function writeMonthlyDataFiles(dataDirectory, data, updatedAt) {
     monthData.tasks = dedupeById(monthData.tasks);
     monthData.journals = dedupeById(monthData.journals);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(monthData, null, 2), 'utf8');
+    if (options.preserveExistingMonths) {
+      const existing = await readOptionalJsonStrict(filePath);
+      if (existing) {
+        await backupExistingFile(filePath);
+        Object.assign(monthData, { ...existing, ...monthData });
+      }
+    }
+    if (options.preserveExistingMonths) await writeJsonAtomically(filePath, monthData);
+    else await fs.writeFile(filePath, JSON.stringify(monthData, null, 2), 'utf8');
   }
 
+  if (options.preserveExistingMonths) return;
   const activeFileNames = new Set(Array.from(byMonth.keys()).map((monthKey) => `${DATA_FILE_PREFIX}${monthKey}.json`));
   for (const filePath of existingFiles) {
     if (!activeFileNames.has(path.basename(filePath))) {
@@ -973,5 +1256,6 @@ module.exports = {
   loadData,
   resetData,
   saveData,
-  setStorageRoot
+  setStorageRoot,
+  previewStorageRoot
 };

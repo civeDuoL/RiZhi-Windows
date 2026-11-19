@@ -163,6 +163,7 @@ button {
 }
 
 .main {
+  position: relative;
   display: grid;
   grid-template-rows: auto 1fr;
   padding: 18px 34px 24px;
@@ -367,6 +368,15 @@ h2 {
 .page.active {
   display: block;
   min-height: 0;
+}
+
+.page.is-leaving {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  min-height: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 #recordsPage.active {
@@ -1628,7 +1638,7 @@ h2 {
 
 .task-time-picker-field {
   display: grid;
-  grid-template-rows: auto 24px 40px 24px;
+  grid-template-rows: auto 40px;
   gap: 4px;
   color: var(--muted);
   font-size: 12px;
@@ -1654,20 +1664,6 @@ h2 {
   outline: 2px solid rgba(47, 143, 103, 0.14);
 }
 
-.task-time-step-button {
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: #66727d;
-  line-height: 1;
-}
-
-.task-time-step-button:hover {
-  color: var(--accent-dark);
-}
-
 .task-time-picker-separator {
   align-self: center;
   padding-top: 22px;
@@ -1676,17 +1672,11 @@ h2 {
   font-weight: 760;
 }
 
-.task-time-picker-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.task-time-picker-actions button {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
+.task-time-picker-hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
 }
 
 .task-title-input {
@@ -2812,10 +2802,15 @@ h2 {
 }
 
 .task-category-settings-item {
+  position: relative;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fbfcfd;
   overflow: hidden;
+}
+
+.task-category-settings-item.is-reordering {
+  z-index: 1;
 }
 
 .task-category-settings-header {
@@ -4586,8 +4581,15 @@ h2 {
   font-size: 24px;
 }
 
-.create-task-topbar > .icon-button {
+.create-task-topbar > .task-modal-close-button {
   justify-self: end;
+}
+
+.task-modal-close-button {
+  min-width: 58px;
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 13px;
 }
 
 .create-task-action-bar {
@@ -4749,7 +4751,7 @@ h2 {
 
 .task-template-row-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 52px 48px 36px;
+  grid-template-columns: minmax(0, 1fr) 52px 48px 58px;
   align-items: center;
   gap: 8px;
   padding-right: 12px;
@@ -4777,15 +4779,15 @@ h2 {
 
 .task-template-delete-button {
   display: grid;
-  width: 34px;
+  min-width: 58px;
   height: 34px;
   place-items: center;
-  padding: 0;
+  padding: 0 8px;
   border: 1px solid #e1bcbc;
   border-radius: 8px;
   background: #fff8f8;
   color: #a52f2f;
-  font-size: 22px;
+  font-size: 13px;
   line-height: 1;
 }
 
